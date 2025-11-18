@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <MPU6050_6Axis_MotionApps20.h>
+#include <ArduinoJson.h>
 
 // === Pin Motor Driver TB6612FNG ===
 #define AIN1 9
@@ -86,93 +87,7 @@ int16_t gx, gy, gz;
 // === Variabel kontrol motor ===
 int motorSpeed = 100;
 
-void setup() {
-  Serial.begin(115200);
-
-  // Setup motor driver
-  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT); pinMode(PWMA, OUTPUT);
-  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT); pinMode(PWMB, OUTPUT);
-
-  // Setup encoder
-  pinMode(ENCODER_LEFT_A, INPUT_PULLUP);
-  pinMode(ENCODER_LEFT_B, INPUT_PULLUP);
-  pinMode(ENCODER_RIGHT_A, INPUT_PULLUP);
-  pinMode(ENCODER_RIGHT_B, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_A), isrLeftA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_B), isrLeftB, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_A), isrRightA, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_B), isrRightB, CHANGE);
-
-  // Setup ultrasonik
-  pinMode(TRIG_LEFT, OUTPUT); pinMode(ECHO_LEFT, INPUT);
-  pinMode(TRIG_MIDDLE, OUTPUT); pinMode(ECHO_MIDDLE, INPUT);
-  pinMode(TRIG_RIGHT, OUTPUT); pinMode(ECHO_RIGHT, INPUT);
-
-  // Inisialisasi MPU6050 DMP
-  Wire.begin();
-  mpu.initialize();
-  devStatus = mpu.dmpInitialize();
-
-  // (opsional) kalibrasi offset
-  mpu.setXAccelOffset(-1684);
-  mpu.setYAccelOffset(-1929);
-  mpu.setZAccelOffset(1131);
-  mpu.setXGyroOffset(43);
-  mpu.setYGyroOffset(-29);
-  mpu.setZGyroOffset(12);
-
-  if (devStatus == 0) {
-    mpu.setDMPEnabled(true);
-    dmpReady = true;
-    packetSize = mpu.dmpGetFIFOPacketSize();
-    Serial.println("MPU6050 DMP ready!");
-  } else {
-    Serial.print("DMP init failed (code ");
-    Serial.print(devStatus);
-    Serial.println(")");
-  }
-
-  stopMotors();
-  Serial.println("DDMR Ready! Waiting commands from Raspberry Pi...");
-  Serial.println("Format: maju XX, mundur XX, kiri XX, kanan XX");
-}
-
-void loop() {
-  // Baca sensor ultrasonik
-  distanceLeft   = readUltrasonic(TRIG_LEFT, ECHO_LEFT);
-  distanceMiddle = readUltrasonic(TRIG_MIDDLE, ECHO_MIDDLE);
-  distanceRight  = readUltrasonic(TRIG_RIGHT, ECHO_RIGHT);
-
-  // Hitung kecepatan encoder
-  calculateSpeed();
-
-  // Baca IMU raw
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-
-  // Hitung pitch & roll dari DMP
-  float pitch = 0, roll = 0;
-  if (dmpReady) {
-    fifoCount = mpu.getFIFOCount();
-    if (fifoCount >= packetSize) {
-      mpu.getFIFOBytes(fifoBuffer, packetSize);
-      mpu.dmpGetQuaternion(&q, fifoBuffer);
-      mpu.dmpGetGravity(&gravity, &q);
-      mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-
-      pitch = ypr[1] * 180 / M_PI;
-      roll  = ypr[2] * 180 / M_PI;
-    }
-  }
-
-  // Terima perintah dari Raspberry Pi
-  readPiCommands();
-
-  // Proses pergerakan robot dengan PID
-  processMovement();
-
-  // Kirim data sensor ke Raspberry Pi
-  sendSensorData(pitch, roll);
-}
+void stopMotors();
 
 // === Baca sensor ultrasonik ===
 int readUltrasonic(int trigPin, int echoPin) {
@@ -406,56 +321,27 @@ void readPiCommands() {
     incoming.trim();
     incoming.toLowerCase();
 
-    // Parse command: "maju 50", "kiri 30", etc.
-    int spaceIndex = incoming.indexOf(' ');
-    String command = "";
-    float value = 0;
+    int colonIndex = incoming.indexOf(':');
+    Serial1.println(incoming);
+    if(colonIndex >= 0) {
+      String command = incoming.substring(0, colonIndex);
+      String params = incoming.substring(colonIndex + 1);
+      
+      if(command == "move"){
+        // Extract direction parameter
+        int directionStart = params.indexOf("direction=") + 10;
+        int directionEnd = params.indexOf(',', directionStart);
+        int direction = params.substring(directionStart, directionEnd).toInt();
 
-    if (spaceIndex > 0) {
-      command = incoming.substring(0, spaceIndex);
-      value = incoming.substring(spaceIndex + 1).toFloat();
-    } else {
-      command = incoming;
-    }
+        // Extract distance parameter
+        int distanceStart = params.indexOf("distance=") + 9;
+        float distance = params.substring(distanceStart).toFloat();
 
-    if (command == "maju" && value > 0) {
-      moveLinear(value, 1);
-      Serial.print("Reply: ok moving forward ");
-      Serial.print(value);
-      Serial.println(" cm");
-    } 
-    else if (command == "mundur" && value > 0) {
-      moveLinear(value, -1);
-      Serial.print("Reply: ok moving backward ");
-      Serial.print(value);
-      Serial.println(" cm");
-    } 
-    else if (command == "kiri" && value > 0) {
-      rotatePivot(-1, 90);
-      delay(100);
-      while(turnActive) { processMovement(); }
-      moveLinear(value, 1);
-      Serial.print("Reply: ok turn left and move ");
-      Serial.print(value);
-      Serial.println(" cm");
-    } 
-    else if (command == "kanan" && value > 0) {
-      rotatePivot(1, 90);
-      delay(100);
-      while(turnActive) { processMovement(); }
-      moveLinear(value, 1);
-      Serial.print("Reply: ok turn right and move ");
-      Serial.print(value);
-      Serial.println(" cm");
-    } 
-    else if (command == "stop") {
-      stopMotors();
-      moveActive = false;
-      turnActive = false;
-      Serial.println("Reply: ok stopping");
-    }
-    else {
-      Serial.println("Reply: unknown command");
+        Serial1.print("command move detected");
+        Serial1.print(distance);
+        Serial1.println(direction);
+        moveLinear(distance, direction);
+      }
     }
   }
 }
@@ -464,4 +350,93 @@ void readPiCommands() {
 void stopMotors() {
   digitalWrite(AIN1, LOW); digitalWrite(AIN2, LOW); analogWrite(PWMA, 0);
   digitalWrite(BIN1, LOW); digitalWrite(BIN2, LOW); analogWrite(PWMB, 0);
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial1.begin(115200); // For communication with Raspberry Pi
+
+  // Setup motor driver
+  pinMode(AIN1, OUTPUT); pinMode(AIN2, OUTPUT); pinMode(PWMA, OUTPUT);
+  pinMode(BIN1, OUTPUT); pinMode(BIN2, OUTPUT); pinMode(PWMB, OUTPUT);
+
+  // Setup encoder
+  pinMode(ENCODER_LEFT_A, INPUT_PULLUP);
+  pinMode(ENCODER_LEFT_B, INPUT_PULLUP);
+  pinMode(ENCODER_RIGHT_A, INPUT_PULLUP);
+  pinMode(ENCODER_RIGHT_B, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_A), isrLeftA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_LEFT_B), isrLeftB, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_A), isrRightA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENCODER_RIGHT_B), isrRightB, CHANGE);
+
+  // Setup ultrasonik
+  pinMode(TRIG_LEFT, OUTPUT); pinMode(ECHO_LEFT, INPUT);
+  pinMode(TRIG_MIDDLE, OUTPUT); pinMode(ECHO_MIDDLE, INPUT);
+  pinMode(TRIG_RIGHT, OUTPUT); pinMode(ECHO_RIGHT, INPUT);
+
+  // Inisialisasi MPU6050 DMP
+  Wire.begin();
+  mpu.initialize();
+  devStatus = mpu.dmpInitialize();
+
+  // (opsional) kalibrasi offset
+  mpu.setXAccelOffset(-1684);
+  mpu.setYAccelOffset(-1929);
+  mpu.setZAccelOffset(1131);
+  mpu.setXGyroOffset(43);
+  mpu.setYGyroOffset(-29);
+  mpu.setZGyroOffset(12);
+
+  if (devStatus == 0) {
+    mpu.setDMPEnabled(true);
+    dmpReady = true;
+    packetSize = mpu.dmpGetFIFOPacketSize();
+    Serial.println("MPU6050 DMP ready!");
+  } else {
+    Serial.print("DMP init failed (code ");
+    Serial.print(devStatus);
+    Serial.println(")");
+  }
+
+  stopMotors();
+  Serial.println("DDMR Ready! Waiting commands from Raspberry Pi...");
+  Serial.println("Format: maju XX, mundur XX, kiri XX, kanan XX");
+}
+
+void loop() {
+  // Baca sensor ultrasonik
+  distanceLeft   = readUltrasonic(TRIG_LEFT, ECHO_LEFT);
+  distanceMiddle = readUltrasonic(TRIG_MIDDLE, ECHO_MIDDLE);
+  distanceRight  = readUltrasonic(TRIG_RIGHT, ECHO_RIGHT);
+
+  // Hitung kecepatan encoder
+  calculateSpeed();
+
+  // Baca IMU raw
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // Hitung pitch & roll dari DMP
+  float pitch = 0, roll = 0;
+  if (dmpReady) {
+    fifoCount = mpu.getFIFOCount();
+    if (fifoCount >= packetSize) {
+      mpu.getFIFOBytes(fifoBuffer, packetSize);
+      mpu.dmpGetQuaternion(&q, fifoBuffer);
+      mpu.dmpGetGravity(&gravity, &q);
+      mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+
+      pitch = ypr[1] * 180 / M_PI;
+      roll  = ypr[2] * 180 / M_PI;
+    }
+  }
+
+  // Terima perintah dari Raspberry Pi
+  readPiCommands();
+
+  // Proses pergerakan robot dengan PID
+  processMovement();
+
+  // Kirim data sensor ke Raspberry Pi
+  sendSensorData(pitch, roll);
 }
