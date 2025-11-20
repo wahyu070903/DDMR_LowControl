@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <MPU6050_6Axis_MotionApps20.h>
-#include <ArduinoJson.h>
 
 // === Pin Motor Driver TB6612FNG ===
 #define AIN1 9
@@ -319,29 +318,60 @@ void readPiCommands() {
   if (Serial.available() > 0) {
     String incoming = Serial.readStringUntil('\n');
     incoming.trim();
-    incoming.toLowerCase();
 
+    // Contoh: "move:direction=up,distance=1"
     int colonIndex = incoming.indexOf(':');
-    Serial1.println(incoming);
-    if(colonIndex >= 0) {
-      String command = incoming.substring(0, colonIndex);
-      String params = incoming.substring(colonIndex + 1);
-      
-      if(command == "move"){
-        // Extract direction parameter
-        int directionStart = params.indexOf("direction=") + 10;
-        int directionEnd = params.indexOf(',', directionStart);
-        int direction = params.substring(directionStart, directionEnd).toInt();
+    if (colonIndex < 0) return;
 
-        // Extract distance parameter
-        int distanceStart = params.indexOf("distance=") + 9;
-        float distance = params.substring(distanceStart).toFloat();
+    // Ambil command
+    String command = incoming.substring(0, colonIndex);
+    String params = incoming.substring(colonIndex + 1);
 
-        Serial1.print("command move detected");
-        Serial1.print(distance);
-        Serial1.println(direction);
-        moveLinear(distance, direction);
-      }
+    if (command == "move") {
+        String direction = "";
+        float distance = 0;
+
+        // --- Extract direction ---
+        int dStart = params.indexOf("direction=") + 10;
+        int dEnd = params.indexOf(',', dStart);
+        if (dEnd < 0) dEnd = params.length();  // kalau direction terakhir
+        direction = params.substring(dStart, dEnd);
+
+        // --- Extract distance ---
+        int disStart = params.indexOf("distance=") + 9;
+        int disEnd = params.indexOf(',', disStart);
+        if (disEnd < 0) disEnd = params.length();
+        distance = params.substring(disStart, disEnd).toFloat();
+
+        // Debug
+        Serial.println("Command: MOVE");
+        Serial.print("Direction = "); Serial.println(direction);
+        Serial.print("Distance = "); Serial.println(distance);
+
+        int direction_num = 0;
+        bool linear = false;
+        bool turning = false;
+
+        if(direction == "up"){
+          direction_num = 1;
+          linear = true;
+        }else if(direction == "down"){
+          direction_num = -1;
+          linear = true;
+        }else if(direction == "right"){
+          direction_num = 1;
+          turning = true;
+        }else if(direction == "left"){
+          direction_num = -1;
+          turning = true;
+        }
+        // Jalankan fungsi
+        if(linear){
+          moveLinear(distance, direction_num);
+        }
+        if(turning){
+          rotatePivot(direction_num, 90);
+        }
     }
   }
 }
