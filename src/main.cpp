@@ -344,9 +344,11 @@ void readPiCommands() {
         distance = params.substring(disStart, disEnd).toFloat();
 
         // Debug
-        Serial.println("Command: MOVE");
-        Serial.print("Direction = "); Serial.println(direction);
-        Serial.print("Distance = "); Serial.println(distance);
+        Serial1.print("Command: MOVE");
+        Serial1.print(" Direction = "); 
+        Serial1.println(direction);
+        Serial1.print(" Distance = "); 
+        Serial1.println(distance);
 
         int direction_num = 0;
         bool linear = false;
